@@ -1,129 +1,432 @@
-import * as React from 'react';
-import Avatar from '@mui/material/Avatar';
-import Button from '@mui/material/Button';
-import CssBaseline from '@mui/material/CssBaseline';
-import TextField from '@mui/material/TextField';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import Checkbox from '@mui/material/Checkbox';
-import Link from '@mui/material/Link';
-import Paper from '@mui/material/Paper';
-import Box from '@mui/material/Box';
-import Grid from '@mui/material/Grid';
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
-import Typography from '@mui/material/Typography';
-import { createTheme, ThemeProvider } from '@mui/material/styles';
+import React from 'react'
+import {useState} from "react"
+import {useEffect} from "react"
+import {useRef} from "react"
+import io from "socket.io-client";
+import{Badge,IconButton, TextField} from "@mui/material";
+import {Button} from '@mui/material';                 ///check
+import {Input} from '@mui/material';
+import VideocamIcon from '@mui/icons-material/Videocam';
+import VideocamOffIcon from '@mui/icons-material/VideocamOff'
+import CallEndIcon from '@mui/icons-material/CallEnd';
+import MicIcon from '@mui/icons-material/Mic';
+import MicOffIcon from '@mui/icons-material/MicOff';
+import ScreenShareIcon from '@mui/icons-material/ScreenShare';
+import StopScreenShareIcon from '@mui/icons-material/StopScreenShare';
+import ChatIcon from '@mui/icons-material/Chat';
+import { useNavigate } from "react-router-dom";
 
-function Copyright(props) {
-  return (
-    <Typography variant="body2" color="text.secondary" align="center" {...props}>
-      {'Copyright © '}
-      <Link color="inherit" href="https://mui.com/">
-        Your Website
-      </Link>{' '}
-      {new Date().getFullYear()}
-      {'.'}
-    </Typography>
-  );
+
+import styles from "../styles/videoComponent.module.css"
+
+
+
+let server_url="http://localhost:8000";
+
+var connections = {};
+
+let peerConfigConnections = {
+    "iceServers": [
+        { "urls": "stun:stun.l.google.com:19302" }
+    ]
 }
 
-// TODO remove, this demo shouldn't need to reset the theme.
+export default function VideoMeetComponent() {
 
-const defaultTheme = createTheme();
+  var socketRef = useRef();
+  let socketIdRef = useRef();
 
-export default function Authentication() {
-  const handleSubmit = (event) => {
-    event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    console.log({
-      email: data.get('email'),
-      password: data.get('password'),
-    });
-  };
+  let localVideoRef = useRef();
 
+let [videoAvailable, setVideoAvailable] = useState(true);
+
+let [audioAvailable, setAudioAvailable] = useState(true);
+
+let [video, setVideo] = useState([]);
+
+let [audio, setAudio] = useState();
+
+let [screen, setScreen] = useState();
+
+let [showModel, setModal] = useState(true);
+
+let [screenAvailable, setScreenAvailable] = useState();
+
+let [messages, setMessages] = useState([]);
+
+let [message, setMessage] = useState("");
+
+let [newMessages, setNewMessages] = useState(0);
+
+let [askForUsername, setAskForUsername] = useState(true);
+
+let [username, setUsername] = useState("");
+
+const VideoRef = useRef([]);
+
+let [videos, setVideos] = useState([]);
+
+
+
+  //TODO
+
+  // if(isChrome() == false){
+
+
+  // }
+
+
+const getPermission = async () => {
+  try{
+    const videoPermission = await navigator.mediaDevices.getUserMedia({video:true});
+    
+    if(videoPermission){
+      setVideoAvailable(true);
+    }else{
+      setVideoAvailable(false);
+    }
+
+    const audioPermission = await navigator.mediaDevices.getUserMedia({audio:true});
+    
+    if(audioPermission){
+      setAudioAvailable(true);
+    }else{
+      setAudioAvailable(false);
+    }
+    
+
+    if(navigator.mediaDevices.getDisplayMedia){
+       setScreenAvailable(true);
+    }else{
+      setScreenAvailable(false);
+    }
+
+    if(videoAvailable || audioAvailable){
+      const userMediaStream = await navigator.mediaDevices.getUserMedia({video: videoAvailable, audio: audioAvailable});
+
+      if(userMediaStream){
+        window.localStream = userMediaStream;
+        if(localVideoRef.current){
+          localVideoRef.current.srcObject = userMediaStream;
+        }
+      }
+    } 
+
+
+  }catch(err){
+     console.log(err);
+  }
+}
+
+  useEffect(() => {
+      getPermission();
+  }, [])
+
+  let getUserMediaSuccess= (stream) =>{
+         try{
+              window.localStream.getTracks().forEach(track => track.stop())
+         } catch (e){console.log(e)}
+
+         window.localStream = stream;
+         localVideoRef.current.srcObject = stream;
+
+         for(let id in connections){
+          if(id == socketIdRef.connections)continue;
+
+          connections[id].addStream(window.localStream)
+   
+          connections[id].createOffer().then((description) => {
+            connections[id].setLocalDescription(description)
+            .then(()=>{
+              socketIdRef.current.emit("signal", id, JSON.stringify({"sdp": connections[id].localDescription }))
+            })
+            .catch(e=> console.log(e))
+          })
+
+         }
+
+         stream.getTracks().forEach(track => track.onended= ()=>{
+          setVideo(false)
+          setAudio(false);
+
+          try{
+            let tracks = localVideoRef.current.srcObject.getTracks()
+            tracks.forEach(tracks => tracks.stop())
+          } catch (e){console.log(e)}
+
+          //TODO BlackSilence
+
+          let blackSilence = (...args) => new MediaStream([black(...args), silence()]);
+          window.localStream = blackSilence();
+          localVideoRef.current.srcObject = window.localStream;
+
+          for(let id in connections){
+            connections[id].addStream(window.localStream)
+            connections[id].createOffer().then((description)=>{
+               connections[id].setLocalDescription(description)
+               .then(()=>{
+                  socketRef.current.emit("signal", id , JSON.stringify({"sdp":connections[id]}))
+               }).catch (e=> console.log(e));
+            })
+          }
+
+
+        })
+  }
+
+
+  let silence = () =>{
+      let ctx = new AudioContext()
+      let oscillator = ctx.createOscillator();
+
+      let dst = oscillator.connect(ctx.createMediaStreamDestination());
+
+      oscillator.start();
+      ctx.resume()
+      return Object.assign(dst.stream.getAudioTracks()[0], { enabled: false })
+
+  }
+
+  //cccc
+  let black = ({ width = 640, height = 480 } = {}) => {
+        let canvas = Object.assign(document.createElement("canvas"), { width, height })
+        canvas.getContext('2d').fillRect(0, 0, width, height)
+        let stream = canvas.captureStream()
+        return Object.assign(stream.getVideoTracks()[0], { enabled: false })
+    }
+
+  let getUserMedia = () => {
+    if((video && videoAvailable) || (audio && audioAvailable)){
+       navigator.mediaDevices.getUserMedia({video: video, audio: audio})
+       .then(getUserMediaSuccess)
+       .then((stream)=>{})
+       .catch((e)=>console.log(e))
+    }else{
+      try{
+        let tracks = localVideoRef.current.srcObject.getTracks();
+        tracks.forEach(track => track.stop())
+      }catch(e){
+
+      }
+    }
+  }
+ 
+
+  useEffect(()=>{
+    if(video !== undefined && audio !== undefined){
+      getUserMedia();
+    }
+  },[audio,video])
+
+
+  //TODO
+  let gotMessageFromServer = (fromId, message) => {
+       var signal =  JSON.parse(message)
+
+       if(fromId !== socketIdRef.current){
+            if(signal.sdp){
+               connections[fromId].setRemoteDescription(new RTCSessionDescription(signal.sdp)).thrn(()=>{
+                   if(signal.sdp.type == "offer"){
+                       connections[fromId].createAnswer().then((description)=>{
+                        connections[fromId].setlocalDescription(description).then(()=>{
+                            socketIdRef.current.emit("signal", fromId, JSON.stringify({"sdp": connections[fromId].setLocalDescription}))
+                        }).catch(e => console.log(e))
+                      }).catch((e => console.log(e)))
+                   }
+               }).catch(e=>console.log(e))
+            }
+            if(signal.ice){
+              connections[fromId].addIceCandidate(new RTCIceCandidate(signal.ice)).catch((e=>console.log(e)));
+            }
+       }
+  }
+
+  //todo addMessage
+  
+
+  let connectToSocketServer = () => {
+       socketRef.current = io.connect(server_url, {secure: false})
+
+       socketRef.current.on('signal', gotMessageFromServer);
+ 
+       socketRef.current.on('connect', ()=>{
+            socketRef.current.emit("join-call", window.location.href)
+
+            socketIdRef.current = socketRef.current.id
+      
+            socketRef.current.on("chat-message", addMessage)
+        
+            socketRef.current.on("user-left", (id)=>{
+              setVideo((video)=>video.filter((video)=>video.socketId != id))
+            })
+
+            socketRef.current.on("user-joine",(id, clients) => {
+                clients.forEach((socketListId)=>{
+
+                     connections[socketListId] = new RTCPeerConnection(peerConfigConnections)
+
+                     connections[socketListId].onicecandidate = (event) => {
+                        if(event.candidate != null){
+                          socketRef.current.emit("signal", socketListId, JSON.stringify({'ice': event.candidate}))
+                        }
+                     }
+                    
+                     connections[socketListId].onAddsStream = (event) => {
+
+                      let videoExists = VideoRef.current.find(video => video.socketId == socketListId);
+                         
+                      if(videoExists) {
+                        setVideo(videos => {
+                          const updatedVideos = videos.map(video =>
+                              video.socketId == socketListId ? {...video, stream: event.stream} : video
+                          );
+                          VideoRef.current = updatedVideos;
+                          return updatedVideos;
+                        })
+                      } else {
+                          let newVideo = {
+                              socketId: socketListId,
+                              stream: event.Stream,
+                              autoPlay: true,
+                              playsinline: true
+                          }
+
+                          setVideos(videos =>{
+                            const updatedVideos = [...videos, newVideo];
+                            VideoRef.current = updatedVideos;
+                            return updatedVideos;
+                          })
+                      }
+ 
+                     };
+
+                     if(window.localStream != undefined && window.localStream != null){
+                         connections[socketListId].addStream(window.localStream);
+                     }else{
+                      //TODO BLACKSLIENCE
+                      // let blackSlience
+
+                      let blackSilence = (...args) => new MediaStream([black(...args), silence()]);
+                      window.localStream = blackSilence();
+                      connections[socketListId].addStream(window.localStream);
+                     }
+
+                })
+                
+                if(id == socketIdRef.current){
+                  for(let id2 in connections) {
+                    if(id2 == socketIdRef.current) continue
+
+                    try{
+                      connections[id2].addStream(window.localStream)
+                    }catch(e){
+                    connections[id2].createOffer().then((description)=>{
+                        connections[id2].setLocalDescription(description)
+                          .then(()=>{
+                            socketRef.current.emit("signal", id2, JSON.stringify({"sdp": connections[id2].setLocalDescription}))
+                          })
+                          .catch(e=> console.log(e))
+                    })
+                    }
+                  }
+                }
+
+            })
+
+       })
+ 
+  }
+
+
+
+  let getDisplayMedia = () => {
+    if(screen) {
+      if(navigator.mediaDevices.getDisplayMedia){
+         navigator.mediaDevices.getDisplayMedia({cideo: true, audio: true})
+         .then(getDisplayMediaSuccess)
+         .then((stream) => {})
+         .catch((e)=>console.log(e))
+      }
+    }
+  }
+
+  useEffect(()=>{
+    if(screen !== undefined){
+      getDisplayMedia();
+    }
+  },[screen])
+
+
+ 
   return (
-    <ThemeProvider theme={defaultTheme}>
-      <Grid container component="main" sx={{ height: '100vh' }}>
-        <CssBaseline />
-        <Grid
-          item
-          xs={false}
-          sm={4}
-          md={7}
-          sx={{
-            backgroundImage: 'url(https://source.unsplash.com/random?wallpapers)',
-            backgroundRepeat: 'no-repeat',
-            backgroundColor: (t) =>
-              t.palette.mode === 'light' ? t.palette.grey[50] : t.palette.grey[900],
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-          }}
-        />
-        <Grid item xs={12} sm={8} md={5} component={Paper} elevation={6} square>
-          <Box
-            sx={{
-              my: 8,
-              mx: 4,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-            }}
-          >
-            <Avatar sx={{ m: 1, bgcolor: 'secondary.main' }}>
-              <LockOutlinedIcon />
-            </Avatar>
-            <Typography component="h1" variant="h5">
-              Sign in
-            </Typography>
-            <Box component="form" noValidate onSubmit={handleSubmit} sx={{ mt: 1 }}>
-              <TextField
-                margin="normal"
-                required
-                fullWidth
-                id="email"
-                label="Email Address"
-                name="email"
-                autoComplete="email"
-                autoFocus
-              />
-              <TextField
-                margin="normal"
-                required
-                fullWidth
-                name="password"
-                label="Password"
-                type="password"
-                id="password"
-                autoComplete="current-password"
-              />
-              <FormControlLabel
-                control={<Checkbox value="remember" color="primary" />}
-                label="Remember me"
-              />
-              <Button
-                type="submit"
-                fullWidth
-                variant="contained"
-                sx={{ mt: 3, mb: 2 }}
-              >
-                Sign In
-              </Button>
-              <Grid container>
-                <Grid item xs>
-                  <Link href="#" variant="body2">
-                    Forgot password?
-                  </Link>
-                </Grid>
-                <Grid item>
-                  <Link href="#" variant="body2">
-                    {"Don't have an account? Sign Up"}
-                  </Link>
-                </Grid>
-              </Grid>
-              <Copyright sx={{ mt: 5 }} />
-            </Box>
-          </Box>
-        </Grid>
-      </Grid>
-    </ThemeProvider>
-  );
+    <div>
+      {askForUsername == true ? 
+          <div>
+            
+            <h2>Enter into Lobby</h2>
+         
+            <TextField  id="outlined-basic" label="Username" value={username} onChange={e=>setUsername(e.target.value)} variant="outlined" />
+            <Button variant="contained" onClick={connect}>Connect</Button>
+
+
+            <div>
+              <video ref={localVideoRef} autoPlay muted  ></video>
+            </div>
+
+          </div> : 
+            <div className={styles.meetVideoContainer}>
+ 
+                   {showModel ? <div className={styles.chatRoom}>
+                       
+                       <div className={styles.chatContainer}>
+                            <h1>Chat</h1>
+                            <div className={styles.chattingDisplay}>
+                                
+                                 {messages.length > 0 ? messages.map((item,index)=>{
+                                    return(
+                                      <div style={{marginBlock:"20px"}} key={index}>
+                                           <p style={{fontWeight: "bold"}}>{item.sender}</p>
+                                          <p>{item.data}</p>
+                                      </div>
+                                    )
+                                 }):<p>No Messages Yet</p>}
+
+                            </div>
+                            <div className={styles.chattingArea}>
+                                <TextField value={message} onChange={(e) => setMessage(e.target.value)} id="outlined-basic" label="Enter Your Chat" variant="outlined" />
+                                <Button variant="contained" onClick={sendMessage} >Send</Button>
+                            </div>
+                       </div>
+                   </div>:<></>}
+                   
+
+                   
+
+             <video className={styles.meetUserVideo}   ref={localVideoRef} autoPlay muted></video>
+             
+             <div className={styles.conferenceView}>
+                        {videos.map((video) => (
+                            <div key={video.socketId}>
+                                <video
+                                    data-socket={video.socketId}
+                                    ref={ref => {
+                                        if (ref && video.stream) {
+                                            ref.srcObject = video.stream;
+                                        }
+                                    }}
+                                    autoPlay
+                                >
+                                </video>
+                            </div>
+
+                        ))}
+
+                    </div>
+          </div>
+     
+           
+      }   
+
+    </div>
+  )
 }
